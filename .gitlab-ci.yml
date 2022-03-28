@@ -1,0 +1,124 @@
+# Inspired by
+# https://docs.gitlab.com/ee/ci/docker/using_docker_build.html#making-docker-in-docker-builds-faster-with-docker-layer-caching
+image: docker:20.10.11
+
+stages:
+  #- build
+  #- test
+  - release
+  - tag
+  #- deploy
+
+variables:
+  # When using dind service, we need to instruct docker to talk with
+  # the daemon started inside of the service. The daemon is available
+  # with a network connection instead of the default
+  # /var/run/docker.sock socket.
+  DOCKER_HOST: tcp://docker:2376
+  #
+  # The 'docker' hostname is the alias of the service container as described at
+  # https://docs.gitlab.com/ee/ci/docker/using_docker_images.html#accessing-the-services.
+  # If you're using GitLab Runner 12.7 or earlier with the Kubernetes executor and Kubernetes 1.6 or earlier,
+  # the variable must be set to tcp://localhost:2376 because of how the
+  # Kubernetes executor connects services to the job container
+  # DOCKER_HOST: tcp://localhost:2376
+  #
+  # Specify to Docker where to create the certificates, Docker will
+  # create them automatically on boot, and will create
+  # `/certs/client` that will be shared between the service and job
+  # container, thanks to volume mount from config.toml
+  DOCKER_TLS_CERTDIR: '/certs'
+  # These are usually specified by the entrypoint, however the
+  # Kubernetes executor doesn't run entrypoints
+  # https://gitlab.com/gitlab-org/gitlab-runner/-/issues/4125
+  DOCKER_TLS_VERIFY: 1
+  DOCKER_CERT_PATH: '$DOCKER_TLS_CERTDIR/client'
+  #
+  CONTAINER_TEST_IMAGE: $CI_REGISTRY_IMAGE:test
+  CONTAINER_TAG_IMAGE: $CI_REGISTRY_IMAGE:$CI_COMMIT_REF_NAME
+  CONTAINER_LATEST_IMAGE: $CI_REGISTRY_IMAGE:latest
+  GITLAB_TOKEN: $CI_JOB_TOKEN
+  # enable docker buildkit. Used with `BUILDKIT_INLINE_CACHE=1` below
+  DOCKER_BUILDKIT: 1
+
+services:
+  - docker:20.10.11-dind
+
+before_script:
+  - echo "$CI_REGISTRY_PASSWORD" | docker login $CI_REGISTRY --username $CI_REGISTRY_USER --password-stdin
+
+#build:builder:
+#  # extends: .base
+#  stage: build
+#  script:
+#    - docker build --build-arg BUILDKIT_INLINE_CACHE=1 --cache-from "$CONTAINER_LATEST_IMAGE" --target builder -t "$CONTAINER_LATEST_IMAGE" .
+#    - docker push "$CONTAINER_LATEST_IMAGE"
+
+# https://gitlab.com/saltycrane/next-docker-multi-stage-gitlab-ci-cd-example/-/blob/main/.gitlab-ci.yml
+# build:
+#   stage: build
+#   script:
+#     - docker pull $CONTAINER_TEST_IMAGE || true
+#     - docker build --build-arg BUILDKIT_INLINE_CACHE=1 --cache-from $CONTAINER_TEST_IMAGE --build-arg FONTAWESOME_NPM_AUTH_TOKEN -t $CONTAINER_TEST_IMAGE .
+#     - docker push $CONTAINER_TEST_IMAGE
+#   only:
+#     - tags
+#     # - merge_requests
+#     - main
+
+#test:
+#  stage: test
+#  script:
+#    - docker pull $CONTAINER_TEST_IMAGE
+#    - docker run -e CI $CONTAINER_TEST_IMAGE yarn test
+#  only:
+#    - tags
+#    - merge_requests
+#    - main
+
+release-image:
+  stage: release
+  script:
+    - docker pull $CONTAINER_LATEST_IMAGE || true
+    - docker build --build-arg BUILDKIT_INLINE_CACHE=1 --cache-from=$CONTAINER_LATEST_IMAGE --build-arg FONTAWESOME_NPM_AUTH_TOKEN --pull -t $CONTAINER_LATEST_IMAGE .
+    - docker push $CONTAINER_LATEST_IMAGE
+  only:
+    - tags
+    #- main
+
+tag-image:
+  stage: tag
+  script:
+    - docker pull $CONTAINER_LATEST_IMAGE
+    - docker tag $CONTAINER_LATEST_IMAGE $CONTAINER_TAG_IMAGE
+    - docker push $CONTAINER_TAG_IMAGE
+  only:
+    - tags
+
+#deploy-staging:
+#  stage: deploy
+#  script:
+#    - export RANCHER_NAMESPACE=$RANCHER_NAMESPACE_STAGING
+#    - export CONTAINER_IMAGE=$CONTAINER_LATEST_IMAGE
+#    - env | grep '^RANCHER_' > .env
+#    - env | grep '^CONTAINER_' >> .env
+#    - env | grep '^CI' >> .env
+#    - env | grep '^SLACK' >> .env
+#    - docker pull $CONTAINER_LATEST_IMAGE
+#    - docker run --env-file=.env -e DOCKER_ENV_CI_SERVER_TLS_CA_FILE $CONTAINER_LATEST_IMAGE yarn deploy:rancher
+#  only:
+#    - main
+
+#deploy-prod:
+#  stage: deploy
+#  script:
+#    - export RANCHER_NAMESPACE=$RANCHER_NAMESPACE_PROD
+#    - export CONTAINER_IMAGE=$CONTAINER_TAG_IMAGE
+#    - env | grep '^RANCHER_' > .env
+#    - env | grep '^CONTAINER_' >> .env
+#    - env | grep '^CI' >> .env
+#    - env | grep '^SLACK' >> .env
+#    - docker pull $CONTAINER_LATEST_IMAGE
+#    - docker run --env-file=.env -e DOCKER_ENV_CI_SERVER_TLS_CA_FILE $CONTAINER_LATEST_IMAGE yarn deploy
+#  only:
+#    - tags
